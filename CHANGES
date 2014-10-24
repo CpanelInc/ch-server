@@ -1,0 +1,14 @@
+CHANGES
+
+2014-10-23 version 0.001
+    * initial release (chris.stith@cpanel.net)
+
+2014-10-29 version 0.002
+    * minor fix: don't include Data::Dumper
+      and print its output on server start
+      as was done during development
+      (chris.stith@cpanel.net) as recommended
+      by Nick Jackson
+    * minor config handling change
+
+

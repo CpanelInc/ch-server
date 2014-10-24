@@ -1,0 +1,67 @@
+#!/bin/bash
+#
+# startup script for ch-server
+# chkconfig:   - 20 80
+# processname: ch-server
+# description: A small, simple web server suitable for healthcheck scripts
+
+# Source function library.
+. /etc/init.d/functions
+
+RETVAL=0
+ARGS=""
+prog="ch-server"
+pidfile="/var/run/ch-server.pid"
+progexec=/usr/bin/ch-server
+if [ -r /etc/default/$prog ]; then
+    . /etc/default/$prog
+fi
+
+start () {
+        echo -n $"Starting $prog: "
+        daemon $progexec /etc/$prog/conf
+        RETVAL=$?
+        echo
+        [ $RETVAL -eq 0 ] && touch /var/lock/subsys/$prog
+}
+stop () {
+        echo -n $"Stopping $prog: "
+        killproc -p $pidfile $prog
+        RETVAL=$?
+        echo
+        [ $RETVAL -eq 0 ] && rm -f /var/lock/subsys/$prog
+}
+reload () {
+        echo -n $"Reloading $prog: "
+        killproc -p $pidfile $prog -HUP
+        RETVAL=$?
+        echo
+}
+# See how we were called.
+case "$1" in
+  start)
+        start
+        ;;
+  stop)
+        stop
+        ;;
+  status)
+        status -p $pidfile $prog
+        ;;
+  restart)
+        stop
+        sleep 1
+        start
+        ;;
+  reload)
+        reload
+        ;;
+  condrestart)
+        [ -f /var/lock/subsys/$prog ] && stop && start || :
+        ;;
+  *)
+        echo $"Usage: $0 {start|stop|status|restart|reload|condrestart}"
+        exit 1
+esac
+
+exit $?

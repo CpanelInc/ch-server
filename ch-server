@@ -1,0 +1,380 @@
+#!/usr/bin/perl
+use strict;
+use warnings;
+use Net::Server::HTTP;
+use JSON;
+
+my $VERSION = 0.002;
+
+my $conf_file = ( defined $ARGV[0] and -f $ARGV[0] ) ? $ARGV[0] : '/etc/ch-server/conf';
+my $mime_file = ( defined $ARGV[1] and -f $ARGV[1] ) ? $ARGV[1] : '/etc/ch-server/mime';
+my %defaults = (
+    'server_name'       => 'ch-server',
+    'port'              => 8080,
+    'ip_version'        => 4,
+    'access_log_file'   => '/var/log/ch-server-access.log',
+    'log_file'          => '/var/log/ch-server-error.log',
+    'pid_file'          => '/var/run/ch-server.pid',
+    'static_files_path' => '/var/www/html',
+    'serve_static'      => 1,
+    'chroot'            => undef,
+    'user'              => 'daemon',
+    'group'             => 'daemon',
+    'daemonize'         => 1,
+    'routes'            => [],
+);
+my $mime = {
+    'txt'  => 'text/plain',
+    'html' => 'text/html',
+};
+
+my $json = JSON->new->utf8;
+my $cfg = process_config_file( $conf_file, \%defaults );
+$mime = process_config_file( $mime_file, $mime );
+local $SIG{ 'HUP' } = sub {
+    $cfg = process_config_file( $conf_file, \%defaults );
+};
+
+push @{ $cfg->{ 'routes' } }, [
+    'static' => ( $cfg->{ 'serve_static' } ? \&handle_static : \&no_static ),
+    '/'      => sub {
+        print "Content-type: text/plain\n\n";
+        print "The $cfg->{ 'server_name' } server is running.\n";
+    },
+]; # default routes
+
+Net::Server::HTTP->run(
+    'user'              => $cfg->{ 'user' },
+    'group'             => $cfg->{ 'group' },
+    'port'              => $cfg->{ 'port' },
+    'ipv'               => $cfg->{ 'ip_version' },
+    'access_log_file'   => $cfg->{ 'access_log_file' },
+    'log_file'          => $cfg->{ 'log_file' },
+    'pid_file'          => $cfg->{ 'pid_file' },
+    'background'        => $cfg->{ 'daemonize' },
+    'setsid'            => $cfg->{ 'daemonize' },
+    'chroot'            => $cfg->{ 'chroot' },
+    'server_revision'   => $cfg->{ 'server_name' } . '/' . $VERSION,
+    'app'               => $cfg->{ 'routes' },
+);
+exit;
+
+sub no_static {
+    print "Content-type: text/plain\n\n";
+    print "Serving of static files is disabled.\n";
+}
+
+sub handle_static {
+    my $self = shift;
+    $ENV{ 'PATH_INFO' } =~ s/\.\.//g; # Net::Server::HTTP protects us from this, but adding a belt to our suspenders.
+    my $sep = ( $cfg->{ 'static_files_path' } =~ m{/$} ? '' : '/' );
+    my $path = $cfg->{ 'static_files_path' } . $sep;
+    my $file = $path . $ENV{ 'PATH_INFO' };
+
+    # disallow symlinked directories within the static serving path
+    for my $part ( $ENV{ 'PATH_INFO' } =~ m{/(.*?)/}g ) {
+        $path .= $1;
+        if ( -l $path ) {
+            $self->send_status( 403, "status 403: Not allowed to view that." );
+            print "Content-type: text/plain\n\nstatus 403: Not allowed to read that file. $ENV{ 'PATH_INFO' }";
+            warn '[' . gmtime() . '] An attempt was made to traverse a symlink to a directory.: ' . $ENV{ 'REMOTE_ADDR' } . " tried for path '$path'\n";
+            return;
+        }
+        $path .= '/';
+    }
+
+    if ( -f $file ) { # -f does not include symlinks
+        my $type = get_type( $file, $mime );
+        if ( defined $type && open my $static, '<', $file ) { # only serve static files for which the MIME type is understood
+            print "Content-type: $type\n\n";
+            while ( <$static> ) {
+                print $_;
+            }
+            close $static;
+        } else {
+            $self->send_status( 403, "Not allowed to read that file." );
+            print "Content-type: text-html\n\nstatus 403: Not allowed to read that file. $ENV{ 'PATH_INFO' }";
+        }
+    } else {
+        $self->send_status( 404, "status 404: File not found." );
+        print "Content-type: text/plain\n\n404: not found. $ENV{ 'PATH_INFO' }";
+    }
+
+    return;
+}
+
+sub process_config_file {
+    my $file = shift;
+    my $def = shift; # takes a ref
+    my %c;
+
+    foreach my $k ( keys %{ $def } ) {
+        $c{ $k } = $def->{ $k };
+    }
+
+    if ( -f $file and open my $cf, '<', $file ) {
+        local $/;
+        my $content = <$cf>;
+        close $cf;
+        my $json_ref = eval {
+             $json->decode( $content );
+        };
+
+        if ( 'HASH' eq ref $json_ref ) {
+            foreach my $k ( keys %{ $json_ref } ) {
+                if ( 'HASH' eq ref $json_ref->{ $k } ) {
+                    foreach my $k2 ( keys %{ $json_ref->{ $k } } ) {
+                        $c{ $k }{ $k2 } = $json_ref->{ $k }{ $k2 };
+                    }
+                } elsif ( 'ARRAY' eq ref $json_ref->{ $k } ) {
+                    push @{ $c{ $k } }, @{ $json_ref->{ $k } };
+                } else {
+                    $c{ $k } = $json_ref->{ $k };
+                }
+            }
+        } else {
+            warn "It appears the configuration file $file is in the wrong format.\n";
+            warn "Running with default settings instead.\n";
+        }
+    } else {
+        warn "There's no configuration file $file or it's there but unreadable.\n";
+        warn "Running with default settings instead.\n";
+    }
+
+    return \%c;
+}
+
+sub get_type {
+    my $f = shift;
+    my $m = shift; # takes a ref
+
+    foreach my $type ( keys %{ $m } ) {
+        if ( $f =~ m/\.$type$/ ) {
+            return $m->{ $type };
+        }
+    }
+
+    return undef;
+}
+
+__END__
+
+=pod
+
+=head1 NAME
+
+ch-server - the check-health web server
+
+=head1 DESCRIPTION
+
+This is a small, simple web server.
+
+It supports CGI programs each at an individually configured URI
+and serving of static files from a single document root with no
+virtual hosts.
+
+It is intended to be suitable for web-accessible service health check scripts and
+other quite targeted cases on systems which would not otherwise
+have a web server installed.
+
+=head1 USAGE
+
+B<ch-server [configuration-file-name] [MIME-mapping-file]>
+
+If not given on the command line, the configuration file defaults to B</etc/ch-server/conf>.
+The MIME mapping file defaults to B</etc/ch-server/mime>. The server runs with some
+(hopefully sane) defaults if there is no configuration file present.
+
+=head1 CONFIGURATION
+
+The configuration file contains a JSON object which can contain the following keys and their corresponding values (listed with their defaults).:
+
+Here is an example configuration file:
+
+B<<
+{"ip_version":4,"port":"4321","group":"stith","routes":[{"check-health":"/home/stith/check-health.pl"},{"foo":"/home/stith/foo.cgi"}],"access_log_file":"/var/log/ch-server-access.log","log_file":"/var/log/ch-server-error.log","user":"stith","static_files_path":"/home/stith/static-files","serve_static":"1"}
+>>
+
+=over
+
+=item   server_name
+
+ default:        ch-server
+
+the name part of the server banner presented to clients
+
+=item   port
+
+ default:        8080
+
+port to which to bind and on which to listen
+
+=item   ip_version
+
+ default:         4
+
+IP version (4, 6, or * for both) to use.
+
+=item   access_log_file
+
+ default:         /var/log/ch-server-access.log
+
+the web server access log
+
+=item   log_file
+
+ default:         /var/log/ch-server-error.log
+
+the web server error log (including startup/shutdown
+
+=item   pid_file
+
+ default:         /var/run/ch-server.pid
+
+where the PID file lives
+
+=item   static_files_path
+
+ default:        /var/www/html
+
+files in this directory can be served at the special URIi
+B<http://server.dom/static/filename> if the server understands their MIME type from their extension
+
+=item   serve_static
+
+ default:        1
+
+whether or not to serve static files via the B<static> special route (see B<ROUTES>, below).
+Attempting to access a static file via that route with this configured to B<0> will generate
+a message about the feature being disabled.
+
+=item   chroot
+
+ default:        undef
+
+where to do a chroot() to, defaults to undef meaning do not chroot
+
+=item   user
+
+ default:        daemon
+
+the user account (by name) under which to run when privileges are dropped; this should usually be set in the config
+
+=item   group
+
+ default:        daemon
+
+the group (by name) under which to run; this should usually be set in the config
+
+=item   daemonize
+
+ default:        1
+
+This denotes whether or not to run in the background in a separate session as a daemon. This can be set to 0 to run in the foreground for debugging.
+
+=item   routes
+
+ default:        (a sub that gives a simple "this is running" type message)
+
+The B<routes> value is actually a JSON array which contains one or more URI to script mappings as key/value pairs in JSON objects.
+See B<ROUTES> below.
+
+=back
+
+=head1 ROUTES
+
+The default route for B</> is set to a "server is alive" type message.
+This route can be overridden in the configuration file if desired.
+
+There is a special route called B<static> which can be optionally disabled.
+It allows a single document root B<(static_files_path)> for static files.
+The B<static_files_path> directory itself may be a symlink to a directory.
+No symlinks will be followed to directories or files within that directory, however.
+This route can be overridden in the configuration file or B<serve_static> may be set to zero to disable it.
+
+B<Every CGI program to be served must have an independently configured route.>
+
+There is no equivalent to B<cgi-bin> or a B<scripts> directory.
+This is a conscious design decision for the sake of security and simplicity.
+If you have a need for many CGI programs you may generate your configuration
+file automatically (as was the thought when designing the server anyway)
+or you may want to consider a more traditional server like Apache or nginx.
+
+Also, there is B<no idea of file type handlers>. All CGI programs must be executable
+by the user account under which the web server is running.
+If the CGI program is a script, some outside way of associating the script with its
+interpeter must be used. A proper shebang path on Unix or a file association elsewhere
+come to mind.
+
+Routes in the configuration file are specified as a JSON array containing JSON objects that are key/value pairs.
+These routes get added to the default B</> route (and the B<static> route if that's enabled) .
+The default routes for B</> and B<static> may be overridden via the configuration file, but needn't be
+if the default behavior is acceptable.
+
+Here's an example B<routes> entry extracted from the example configuration file above.
+
+B<"routes":[{"check-health":"/home/stith/check-health.pl"},{"foo":"/home/stith/foo.cgi"}]>
+
+To add another route, simply add another key/value pair to this object.:
+
+B<"routes":[{"check-health":"/home/stith/check-health.pl"},{"foo":"/home/stith/foo.cgi"},{"bar":"/home/stith/bar.py"}]>
+
+=head1 MIME
+
+The server by default has an B<intentionally very limited idea of MIME types when being used to serve static files>.
+The mapping file is a straightforward mapping of filename ending ("extension") to MIME type.
+The default mapping file as shipped contains types only for these file enadings.:
+B< .txt .html .png .gif .jpg .jpeg .pdf >
+
+B<Requests for static files with no mapped MIME type will be rejected.>
+Unlike many web servers which default to serving everything as text or HTML,
+the intent in this case is to serve only what the server is reasonably sure about.
+
+A CGI program of course can determine its own appropriate MIME type and send that to the client.
+
+There is no internal default for MIME types.
+
+=head1 GOTCHAS
+
+=over
+
+=item routes for CGI
+
+You must configure a route for each CGI program to be served.
+(See B<ROUTES>, above.)
+
+=item no filetype handlers
+
+No filetype handlers are involved, so your CGI program must be able to be run by the server as an executable.
+(See B<ROUTES>, above.)
+
+=item symlinks
+
+No symlinks will be followed within the static files directory.
+(See B<ROUTES>, above.)
+
+=item MIME types
+
+An intentionally narrow idea of MIME types is used and unknown file types will not be served.
+(See B<MIME>, above.)
+
+=back
+
+=head1 ACKNOWLEDGMENTS / SEE ALSO
+
+The Perl module distribution B<Net::Server> and in particular B<Net::Server::HTTP> made a ready
+foundation for this little server. Paul Seamons (CPAN/PAUSE id "RHANDOM") is the author.
+
+=head1 AUTHOR
+
+Christopher E. Stith ( chris.stith@cpanel.net )
+
+=head1 MAINTAINERS
+
+cPanel DevOps team ( devopsdist@cpanel.net )
+
+=head1 COPYRIGHT
+
+Copyright 2014, cPanel Inc.
+
+=cut

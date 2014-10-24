@@ -1,0 +1,14 @@
+ABOUT
+
+ch-server is a small, simple web server.
+
+It supports CGI programs each at an individually configured URI and serving of
+static files from a single document root with no virtual hosts.
+
+It is intended to be suitable for web-accessible service health check scripts
+and other quite targeted cases on systems which would not otherwise have a web
+server installed.
+
+It makes use of the fine work of Paul Seamons (PAUSE/CPAN ID: RHANDOM) on the
+Net::Server distribution of Perl modules.
+
