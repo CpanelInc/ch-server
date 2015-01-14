@@ -22,6 +22,7 @@ my %defaults = (
     'group'             => 'daemon',
     'daemonize'         => 1,
     'routes'            => [],
+    'routes_directory'  => '',
 );
 my $mime = {
     'txt'  => 'text/plain',
@@ -132,6 +133,10 @@ sub process_config_file {
                     $c{ $k } = $json_ref->{ $k };
                 }
             }
+
+            if ( $c{ 'routes_directory' } ) {
+                process_routes_directory( \%c );
+            }
         } else {
             warn "It appears the configuration file $file is in the wrong format.\n";
             warn "Running with default settings instead.\n";
@@ -142,6 +147,35 @@ sub process_config_file {
     }
 
     return \%c;
+}
+
+sub process_routes_directory {
+    my $c = shift;
+
+    if( opendir( my $routes_dir_fd, $c->{ 'routes_directory' } ) ) {
+        while( my $filename  = readdir( $routes_dir_fd ) ) {
+            next if( $filename !~ /\.conf$/ );
+
+            open( my $cf, '<', "$c->{ 'routes_directory' }/$filename" ) or next;
+            local $/;
+            my $content = <$cf>;
+            close( $cf );
+            my $json_ref = eval {
+                $json->decode( $content );
+            };
+
+            if ( 'ARRAY' eq ref $json_ref ) {
+                push @{ $c->{ 'routes' }}, @{ $json_ref };
+            } else {
+                warn "It appears the routes configuration file ";
+                warn "$c->{ 'routes_directory' }/$filename is in the wrong";
+                warn "fornat. Skipping it.\n";
+            }
+        }
+    } else {
+        warn "The given routes directory $c->{ 'routes_directory'} doesn't";
+        warn "seem to be a directory. Ignoring setting.\n";
+    }
 }
 
 sub get_type {
@@ -278,6 +312,12 @@ This denotes whether or not to run in the background in a separate session as a 
 
 The B<routes> value is actually a JSON array which contains one or more URI to script mappings as key/value pairs in JSON objects.
 See B<ROUTES> below.
+
+=item routes_directory
+
+  default: zero-length string
+
+B<routes_directory> should be fully qualified path to a directory with one or more JSON formatted files. These files should be an array of multiple JSON objects, each one being a key/value pair for a specific route. See B<ROUTES> below.
 
 =back
 

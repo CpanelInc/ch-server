@@ -1,0 +1,8 @@
+diff -urN ch-server-0.002.old/etc/ch-server/conf ch-server-0.002/etc/ch-server/conf
+--- ch-server-0.002.old/etc/ch-server/conf	2014-10-24 08:51:57.000000000 -0500
++++ ch-server-0.002/etc/ch-server/conf	2015-01-14 16:11:23.100185159 -0600
+@@ -1 +1,3 @@
+-{}
++{
++  "routes_directory": "/etc/ch-server/routes.d"
++}

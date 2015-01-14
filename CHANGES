@@ -11,4 +11,8 @@ CHANGES
       by Nick Jackson
     * minor config handling change
 
+2015-01-14 version 0.003
+    * Added support for a routes_directory
+      conf option to allow for multiple json
+      routes files
 

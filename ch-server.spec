@@ -1,6 +1,6 @@
 %define origname ch-server
 %define name ch-server
-%define version 0.002
+%define version 0.003
 %define release 1
 
 Name: %{name}
@@ -12,7 +12,7 @@ Group: Server Platform
 License: MIT ( http://opensource.org/licenses/mit-license.html )
 URL: https://duck.cpanel.net/c-stith-s-repos/ch-server
 Source: https://duck.cpanel.net/c-stith-s-repos/ch-server/blobs/master/ch-server.tar.gz
-Source1: ch-server.tar.gz
+Patch0: routes-directory.patch
 
 Packager: Christopher E. Stith <chris.stith@cpanel.net>
 BuildRoot: %{_tmppath}/%{name}-%{version}-%{release}
@@ -31,6 +31,7 @@ It is intended to be suitable for web-accessible service health check scripts an
 
 %prep
 %setup -q
+%patch0 -p1
 
 %build
 
@@ -43,6 +44,7 @@ install -d 0755 %{buildroot}/%{_mandir}/man1
 install -d 0755 %{buildroot}/%{_sysconfdir}
 install -d 0755 %{buildroot}/%{_sysconfdir}/init.d
 install -d 0755 %{buildroot}/%{_sysconfdir}/%{name}
+install -d 0755 %{buildroot}/%{_sysconfdir}/%{name}/routes.d
 install -d 0755 %{_builddir}/%{name}-%{version}
 install -m 0755 %{_builddir}/%{name}-%{version}/ch-server			%{buildroot}/%{_bindir}/ch-server
 install -m 0755 %{_builddir}/%{name}-%{version}/etc/init.d/ch-server       	%{buildroot}/%{_sysconfdir}/init.d/ch-server
@@ -60,6 +62,7 @@ install -m 0644 %{_builddir}/%{name}-%{version}/man/ch-server.1.gz		%{buildroot}
 %{_sysconfdir}/init.d/ch-server
 %config(noreplace) %{_sysconfdir}/%{name}/mime
 %config(noreplace) %{_sysconfdir}/%{name}/conf
+%dir %{_sysconfdir}/%{name}/routes.d
 %{_mandir}/man1/ch-server.1.gz
 
 %pre
@@ -82,6 +85,9 @@ if [ "$1" = "1" ]; then #if this is a fresh install . . .
 fi
 
 %changelog
+* Wed Jan 14 2015 Scott O'Neil <scott@cpanel.net> - 0.003
+- Added support for a routes directory
+
 * Wed Oct 29 2014 Christopher E. Stith <chris.stith@cpanel.net> - 0.002
 - Removed Data::Dumper used during development
 - Changed the unshift in the config file processing to push
